@@ -1,0 +1,150 @@
+import pandas as pd
+from sklearn.model_selection import train_test_split
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.preprocessing import StandardScaler
+from sklearn.metrics import accuracy_score
+from sklearn.compose import ColumnTransformer
+from sklearn.pipeline import Pipeline
+from sklearn.metrics import confusion_matrix
+import matplotlib.pyplot as plt
+import numpy as np
+import joblib
+
+
+# 데이터프레임
+df = pd.read_csv("datas_plus.csv") # 이 data_plus 파일은 오류가 수정된 파일로 실제로 이 코드를 작동할 때에는 깃헙에 올라온 파일을 쓰시면 작동하지 않습니다.
+
+content_columns = ['post_title', 'post_content', 'post_tags']
+ocr_columns = ['post_first_image_ocr', 'post_last_image_ocr']
+numeric_columns = ['post_comment_count', 'link_count', 'post_count', 'line_count', 'avg_line_length', 'min_line_length', 'max_line_length', 'short_line_ratio']
+target_column = 'label'
+
+# 전처리
+df[content_columns] = df[content_columns].fillna('')
+df['content_combined'] = df[content_columns].agg(' '.join, axis=1)
+df[ocr_columns] = df[ocr_columns].fillna('')
+df['ocr_combined'] = df[ocr_columns].agg(' '.join, axis=1)
+df[numeric_columns] = df[numeric_columns].fillna(0)
+
+# 날짜를 해석 가능한 수치로 바꿈
+df['creation_date'] = pd.to_datetime(df['blog_creation_date'], format='%Y%m%d', errors='coerce')
+df['post_date'] = pd.to_datetime(df['post_date'], format='%Y%m%d', errors='coerce')
+df['creation_date'] = df['creation_date'].dt.year
+df['post_date'] = df['post_date'].dt.year
+df['creation_date'] = df['creation_date'].fillna(df['creation_date'].mean())
+
+# X/y 분리
+X = df[['content_combined']+['ocr_combined']+numeric_columns+['creation_date']+['post_date']]
+y = df[target_column]
+
+# 학습/테스트 분할
+X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+
+
+# 그리드 탐색 모델
+# 최적 파라미터 정보 읽기
+best_params = {
+    'classifier__max_depth': None,
+    'classifier__min_samples_split': 2,
+    'classifier__n_estimators': 200,
+    'preprocessor__content__max_df': 0.8,
+    'preprocessor__content__ngram_range': (1, 2),
+    'preprocessor__ocr__max_df': 0.7,
+    'preprocessor__ocr__ngram_range': (1, 2)
+}
+
+# 파라미터 적용
+content_vectorizer = TfidfVectorizer(
+    max_features=1000,
+    max_df=best_params['preprocessor__content__max_df'],
+    ngram_range=best_params['preprocessor__content__ngram_range']
+)
+ocr_vectorizer = TfidfVectorizer(
+    max_features=1000,
+    max_df=best_params['preprocessor__ocr__max_df'],
+    ngram_range=best_params['preprocessor__ocr__ngram_range']
+)
+
+# 전처리기 정의
+preprocessor = ColumnTransformer(transformers=[
+    ('content', content_vectorizer, 'content_combined'),
+    ('ocr', ocr_vectorizer, 'ocr_combined'),
+    ('num', StandardScaler(), numeric_columns + ['creation_date', 'post_date'])
+])
+# 분류기 정의
+classifier = RandomForestClassifier(
+    n_estimators=best_params['classifier__n_estimators'],
+    max_depth=best_params['classifier__max_depth'],
+    min_samples_split=best_params['classifier__min_samples_split'],
+    random_state=42
+)
+# 전체 파이프라인 구성
+final_model = Pipeline(steps=[
+    ('preprocessor', preprocessor),
+    ('classifier', classifier)
+])
+
+# 학습 시작
+final_model.fit(X_train, y_train)
+
+# Threshold 튜닝
+y_probs = final_model.predict_proba(X_test)[:, 1]
+y_pred_threshold = (y_probs > 0.45).astype(int)
+
+# 최종 결과 출력
+acc = accuracy_score(y_test, y_pred_threshold)
+print(f"Accuracy: {acc:.2f}")
+cm = confusion_matrix(y_test, y_pred_threshold, labels=[1, 0])
+TP = cm[0, 0]
+FN = cm[0, 1]
+FP = cm[1, 0]
+print(f"FN (False Negative): {FN}")
+print(f"FP (False Positive): {FP}")
+print("recall: ", ((y_test == 1).sum()-FN)/(y_test == 1).sum())
+print("precision: ", TP/(TP+FP))
+
+
+# 모델 저장
+best_threshold = 0.45
+joblib.dump((final_model, best_threshold), 'final_model.joblib')
+
+
+# 아래부터는 실제 모델 저장과 관계 없는 추가 기능입니다.
+# 오판 샘플 저장
+X_test_copy = X_test.copy()
+X_test_copy['actual_label'] = y_test
+X_test_copy['predicted_label'] = y_pred_threshold
+
+misclassified = X_test_copy[X_test_copy['actual_label'] != X_test_copy['predicted_label']]
+print(misclassified.shape)
+misclassified.to_csv('misclassified_samples.csv', index=False)
+
+
+# 모델 성능 평가 및 시각화
+# 파이프라인에서 모델 및 전처리기 추출
+rf_model = final_model.named_steps['classifier']
+preprocessor = final_model.named_steps['preprocessor']
+
+# 피처 이름 추출
+content_vec = preprocessor.named_transformers_['content']
+ocr_vec = preprocessor.named_transformers_['ocr']
+content_features = [f"content__{feat}" for feat in content_vec.get_feature_names_out()]
+ocr_features = [f"ocr__{feat}" for feat in ocr_vec.get_feature_names_out()]
+numeric_features = numeric_columns + ['creation_date', 'post_date']
+feature_names = content_features + ocr_features + numeric_features
+
+# 중요도 추출
+importances = rf_model.feature_importances_
+
+# 상위 20개 피처만 시각화
+plt.rcParams['font.family'] = 'Malgun Gothic'  # 맑은 고딕
+plt.rcParams['axes.unicode_minus'] = False
+
+indices = np.argsort(importances)[-20:]
+plt.figure(figsize=(10, 6))
+plt.title("Top 20 Feature Importances")
+plt.barh(range(len(indices)), importances[indices], align='center')
+plt.yticks(range(len(indices)), [feature_names[i] for i in indices])
+plt.xlabel('Importance')
+plt.show()

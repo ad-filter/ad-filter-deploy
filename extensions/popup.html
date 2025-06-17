@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="UTF-8" />
+    <style>
+      body {
+        width: 200px; /* 👈 원하는 가로폭 */
+        font-family: Arial, sans-serif;
+        padding: 10px;
+      }
+      label {
+        font-size: 14px;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        white-space: nowrap;
+      }
+      .guide {
+        margin-top: 8px;
+        font-size: 12px;
+        color: #555;
+        line-height: 1.4;
+      }
+    </style>
+  </head>
+  <body>
+    <label>
+      N-Blog 광고 감별기 활성화
+      <input type="checkbox" id="toggleSwitch" />
+    </label>
+
+    <p class="guide">
+      🔃: 광고인지 판단하는 중입니다.<br />
+      ✅: 광고가 아닙니다. 안심하세요!<br />
+      🚫: 광고일 가능성이 높습니다.<br />
+      ❔: 광고 판별을 진행할 수 없습니다.<br />
+      (<b>네이버 블로그</b>의 글만 가능)
+    </p>
+
+    <script src="popup.js"></script>
+  </body>
+</html>
